@@ -1,0 +1,269 @@
+A1: Individual Assignment | Business Analysis with Structured Data
+Suraj Udasi
+
+
+Q1: Rank airlines by year: what are the airlines with the most flights by year? Any trends worth noting?
+
+-- Selects the month, airline, and counts of total, delayed, cancelled, and diverted flights
+-- Additionally, calculates delay, cancellation, and diversion rates for a quick overview
+SELECT 
+    month, 
+    operating_airline, 
+    COUNT(flights) AS total_flights, -- Total number of flights
+    SUM(CASE WHEN arrdel15 = 1 THEN 1 ELSE 0 END) AS delayed_flights, -- Number of delayed flights
+    SUM(CASE WHEN cancelled = 1 THEN 1 ELSE 0 END) AS cancelled_flights, -- Number of cancelled flights
+    SUM(CASE WHEN diverted = 1 THEN 1 ELSE 0 END) AS diverted_flights, -- Number of diverted flights
+    ROUND(SUM(CASE WHEN arrdel15 = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(flights), 2) AS delay_rate, -- Delay rate (%)
+    ROUND(SUM(CASE WHEN cancelled = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(flights), 2) AS cancellation_rate, -- Cancellation rate (%)
+    ROUND(SUM(CASE WHEN diverted = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(flights), 2) AS diversion_rate, -- Diversion rate (%)
+    ROUND((COUNT(flights) - SUM(CASE WHEN arrdel15 = 1 THEN 1 ELSE 0 END)) * 100.0 / COUNT(*), 2) AS on_time_performance -- On-time performance (%)
+FROM 
+    flights_2023
+GROUP BY 
+    month, 
+    operating_airline
+ORDER BY 
+    total_flights DESC;
+
+
+Q2: When is the best time of day/day of week/time of year to fly to minimise delays?
+
+
+A.
+-- CTE for preprocessing flight data with delay information
+WITH delays_cte AS (
+    SELECT 
+        dayofweek,
+        CASE
+            WHEN dayofweek = 1 THEN 'Monday'
+            WHEN dayofweek = 2 THEN 'Tuesday'
+            WHEN dayofweek = 3 THEN 'Wednesday'
+            WHEN dayofweek = 4 THEN 'Thursday'
+            WHEN dayofweek = 5 THEN 'Friday'
+            WHEN dayofweek = 6 THEN 'Saturday'
+            ELSE 'Sunday'
+        END as "day",
+        CASE
+            WHEN crsdeptime <= 359 THEN 'Late Night (12 am - 4 am)'
+            WHEN crsdeptime <= 759 THEN 'Early Morning (4 am - 8 am)'
+            WHEN crsdeptime <= 1159 THEN 'Morning (8 am - 12 pm)'
+            WHEN crsdeptime <= 1559 THEN 'Afternoon (12 pm - 4 pm)'
+            WHEN crsdeptime <= 1959 THEN 'Evening (4 pm - 8 pm)'
+            ELSE 'Night (8 pm - 12 am)'
+        END as "departure_time",
+        arrdelay,
+        arrdel15, -- 1 if flight is delayed more than 15 minutes, 0 otherwise
+        cancelled,
+        diverted,
+        flights
+    FROM flights_2023
+)
+-- query to summarize flight delays
+SELECT 
+    dayofweek,
+    day,
+    departure_time,
+    SUM(arrdelay) as total_delay, -- Total delay time in minutes
+    AVG(arrdelay) as average_delay, -- Average delay per flight
+    SUM(cancelled) as cancelled_flights, -- Total number of cancelled flights
+    SUM(diverted) as diverted_flights, -- Total number of diverted flights
+    SUM(arrdel15) as delayed_flights, -- Total number of delayed flights
+    COUNT(flights) as total_flights, -- Total number of flights
+    COUNT(flights) - SUM(arrdel15) as non_delayed_flights, -- Total number of non-delayed flights
+    ROUND((COUNT(flights) - SUM(arrdel15)) * 100.0 / COUNT(flights), 2) as on_time_performance -- OTP as a percentage 
+FROM delays_cte
+GROUP BY dayofweek, day, departure_time
+ORDER BY average_delay ASC, on_time_performance DESC;
+
+
+B.
+-- for preprocessing flight data with delay information
+WITH delays_cte AS (
+    SELECT 
+        dayofweek, -- Day of the week as a number
+        CASE
+            WHEN dayofweek = 1 THEN 'Monday'
+            WHEN dayofweek = 2 THEN 'Tuesday'
+            WHEN dayofweek = 3 THEN 'Wednesday'
+            WHEN dayofweek = 4 THEN 'Thursday'
+            WHEN dayofweek = 5 THEN 'Friday'
+            WHEN dayofweek = 6 THEN 'Saturday'
+            ELSE 'Sunday'
+        END as "day",
+        CASE -- Categorizing departure time into time slots
+            WHEN crsdeptime <= 359 THEN 'Late Night (12 am - 4 am)'
+            WHEN crsdeptime <= 759 THEN 'Early Morning (4 am - 8 am)'
+            WHEN crsdeptime <= 1159 THEN 'Morning (8 am - 12 pm)'
+            WHEN crsdeptime <= 1559 THEN 'Afternoon (12 pm - 4 pm)'
+            WHEN crsdeptime <= 1959 THEN 'Evening (4 pm - 8 pm)' 
+            ELSE 'Night (8 pm - 12 am)'
+        END as "departure_time",
+        arrdelay, -- Arrival delay time in minutes
+        arrdel15, -- Indicator if flight is delayed more than 15 minutes
+        cancelled, -- Indicator if flight is cancelled
+        diverted, -- Indicator if flight is diverted
+        flights -- Count of flights
+    FROM flights_2023 -- Source table containing flight data
+),
+-- to summarize delays by day of the week and departure time
+departure_time_cte AS (
+    SELECT 
+        dayofweek,
+        departure_time,
+        SUM(arrdelay) as total_delay, -- Total delay time in minutes
+        SUM(cancelled) as cancelled_flights, -- Total number of cancelled flights
+        SUM(diverted) as diverted_flights, -- Total number of diverted flights
+        SUM(arrdel15) as delayed_flights, -- Total number of delayed flights
+        COUNT(flights) as total_flights, -- Total number of flights
+        ROUND(SUM(arrdel15) * 100.0 / COUNT(flights), 2) as "delayed ratio" -- Delay ratio as a percentage
+    FROM delays_cte
+    GROUP BY dayofweek, departure_time -- Grouping by day of the week and departure time
+),
+-- to rank departure times by the least delay ratio
+ranked_delays AS (
+    SELECT 
+        dayofweek,
+        departure_time,
+        "delayed ratio",
+        RANK() OVER (PARTITION BY dayofweek ORDER BY "delayed ratio" ASC) as delay_rank -- Ranking delay ratio for each day
+    FROM departure_time_cte
+)
+-- to display a summary of delays, cancellations, and diversions
+SELECT 
+    d.dayofweek,
+    d.day,
+    r.departure_time as "least_delay_time", -- Departure time with least delays
+    SUM(d.arrdelay) as total_delay, -- Total delay in minutes
+    ROUND(AVG(d.arrdelay),2) as average_delay, -- Average delay per flight
+    SUM(d.cancelled) as cancelled_flights, -- Total number of cancelled flights
+    SUM(d.diverted) as diverted_flights, -- Total number of diverted flights
+    SUM(d.arrdel15) as delayed_flights, -- Total number of delayed flights
+    COUNT(*) as total_flights, -- Total number of flights
+    ROUND((COUNT(*) - SUM(d.arrdel15)) * 100.0 / COUNT(*), 2) as on_time_performance -- OTP as a percentage
+FROM delays_cte d
+JOIN ranked_delays r ON d.dayofweek = r.dayofweek AND r.delay_rank = 1 -- Joining with ranked delays to get least delay times
+GROUP BY d.dayofweek, d.day, r.departure_time -- Grouping results
+ORDER BY average_delay ASC, on_time_performance DESC;
+
+The primary insight from this query is to identify the best days of the week and times of day to fly in order to experience the least delays. By focusing on the time slots with the lowest delayed flight ratios and considering average delays and on-time performance, it helps in determining the most favorable times for travel in terms of minimal disruptions.
+
+
+C. 
+WITH delays_cte AS (
+    SELECT 
+        dayofweek,
+        CASE
+            WHEN dayofweek = 1 THEN 'Monday'
+            WHEN dayofweek = 2 THEN 'Tuesday'
+            WHEN dayofweek = 3 THEN 'Wednesday'
+            WHEN dayofweek = 4 THEN 'Thursday'
+            WHEN dayofweek = 5 THEN 'Friday'
+            WHEN dayofweek = 6 THEN 'Saturday'
+            ELSE 'Sunday'
+        END as "day",
+        CASE
+            WHEN crsdeptime <= 359 THEN 'Late Night (12 am - 4 am)'
+            WHEN crsdeptime <= 759 THEN 'Early Morning (4 am - 8 am)'
+            WHEN crsdeptime <= 1159 THEN 'Morning (8 am - 12 pm)'
+            WHEN crsdeptime <= 1559 THEN 'Afternoon (12 pm - 4 pm)'
+            WHEN crsdeptime <= 1959 THEN 'Evening (4 pm - 8 pm)' 
+            ELSE 'Night (8 pm - 12 am)'
+        END as "departure_time",
+        arrdelay,
+        arrdel15, -- 1 if flight is delayed more than 15 minutes, 0 otherwise
+        cancelled,
+        diverted,
+        flights
+    FROM flights_2023
+)
+SELECT 
+    day,
+    departure_time,
+    SUM(arrdelay) as total_delay,
+    ROUND(AVG(arrdelay),2) as average_delay, -- Average delay per flight
+    SUM(cancelled) as cancelled_flights,
+    SUM(diverted) as diverted_flights,
+    SUM(arrdel15) as delayed_flights,
+    COUNT(flights) as total_flights,
+    ROUND((COUNT(flights) - SUM(arrdel15)) * 100.0 / COUNT(flights), 2) as on_time_performance -- OTP as a percentage
+FROM delays_cte
+GROUP BY day, departure_time, dayofweek
+ORDER BY dayofweek, average_delay ASC, on_time_performance DESC;
+
+
+Q5: What percentage of flights delayed by weather per airport?
+
+A. By origin
+WITH total_delay_cte AS (
+    SELECT 
+        origin,
+        origincityname,
+        arrdelayminutes,
+        arrdel15,
+        cancelled,
+        diverted,
+        weatherdelay,
+        flights
+    FROM flights_2023
+)
+SELECT 
+    origin,
+    origincityname,
+    SUM(arrdelayminutes) AS total_delay, -- Total delay in minutes
+    ROUND(AVG(arrdelayminutes), 2) AS average_delay, -- Average delay per flight
+    COUNT(flights) AS total_flights, -- Total number of flights
+    SUM(cancelled) AS total_cancelled, -- Total number of cancelled flights
+    SUM(diverted) AS total_diverted, -- Total number of diverted flights
+    SUM(arrdel15) AS delayed_flights, -- Total number of flights delayed more than 15 minutes
+    SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) AS weather_delay_flights, -- Number of flights delayed due to weather
+    ROUND(SUM(arrdel15) * 100.0 / COUNT(flights), 2) AS ratio_delayed, -- Ratio of delayed flights to total flights
+    ROUND(SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) * 100.0 / SUM(arrdel15), 2) AS weather_delayed_ratio, -- Ratio of weather delayed flights to delayed flights
+    ROUND(SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(flights), 2) AS weather_delayed_total_ratio, -- Ratio of weather delayed flights to total flights
+    ROUND((COUNT(flights) - SUM(arrdel15)) * 100.0 / COUNT(flights), 2) AS on_time_performance -- OTP as a percentage
+FROM total_delay_cte
+GROUP BY origin, origincityname
+HAVING SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) > 0
+ORDER BY delayed_flights DESC;
+
+B. By Destination
+WITH total_delay_cte AS (
+    SELECT 
+        dest,
+        destcityname,
+        arrdelayminutes,
+        arrdel15,
+        cancelled,
+        diverted,
+        weatherdelay,
+        flights
+    FROM flights_2023
+)
+SELECT 
+    dest,
+    destcityname,
+    SUM(arrdelayminutes) AS total_delay, -- Total delay in minutes
+    AVG(arrdelayminutes) AS average_delay, -- Average delay per flight
+    COUNT(flights) AS total_flights, -- Total number of flights
+    SUM(cancelled) AS total_cancelled, -- Total number of cancelled flights
+    SUM(diverted) AS total_diverted, -- Total number of diverted flights
+    SUM(arrdel15) AS delayed_flights, -- Total number of flights delayed more than 15 minutes
+    SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) AS weather_delay_flights, -- Number of flights delayed due to weather
+    ROUND(SUM(arrdel15) * 100.0 / COUNT(flights), 2) AS ratio_delayed, -- Ratio of delayed flights to total flights
+    ROUND(SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) * 100.0 / SUM(arrdel15), 2) AS weather_delayed_ratio, -- Ratio of weather delayed flights to delayed flights
+    ROUND(SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(flights), 2) AS weather_delayed_total_ratio, -- Ratio of weather delayed flights to total flights
+    ROUND((COUNT(flights) - SUM(arrdel15)) * 100.0 / COUNT(flights), 2) AS on_time_performance -- OTP as a percentage
+FROM total_delay_cte
+GROUP BY dest, destcityname
+HAVING SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) > 0
+ORDER BY delayed_flights DESC;
+
+-- Query to bucket delays by categories
+SELECT
+SUM(flights) as total_delay,
+SUM(CASE WHEN carrierdelay > 0 THEN 1 ELSE 0 END) AS carrier_delay,
+SUM(CASE WHEN weatherdelay > 0 THEN 1 ELSE 0 END) AS weather_delay,
+SUM(CASE WHEN nasdelay > 0 THEN 1 ELSE 0 END) AS nas_delay,
+SUM(CASE WHEN securitydelay > 0 THEN 1 ELSE 0 END) AS security_delay,
+SUM(CASE WHEN lateaircraftdelay > 0 THEN 1 ELSE 0 END) AS lateaircraft_delay
+FROM flights_2023
+WHERE arrdel15 =1;
